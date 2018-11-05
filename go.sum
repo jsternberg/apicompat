@@ -1,0 +1,4 @@
+github.com/dave/jennifer v1.1.0 h1:9B19+/zrxe9LRuyLY8MHYYfxjf0p6nSWv/PMZTqp+aE=
+github.com/dave/jennifer v1.1.0/go.mod h1:fIb+770HOpJ2fmN9EPPKOqm1vMGhB+TwXKMZhrIygKg=
+golang.org/x/tools v0.0.0-20181105194243-ebdbadb46e45 h1:oomEDQ8+RA5M5u6LlC+f9F1+o2rrigkOJJNZsdrWacg=
+golang.org/x/tools v0.0.0-20181105194243-ebdbadb46e45/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=
