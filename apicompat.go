@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/types"
@@ -54,6 +55,41 @@ func typeOf(typ types.Type) (*jen.Statement, error) {
 			return nil, err
 		}
 		return jen.Map(key).Add(value), nil
+	case *types.Signature:
+		return jen.Func().ParamsFunc(func(gr *jen.Group) {
+			params := typ.Params()
+			for i := 0; i < params.Len(); i++ {
+				typ, err := typeOf(params.At(i).Type())
+				if err != nil {
+					panic(err)
+				}
+				gr.Add(typ)
+			}
+		}).Do(func(stmt *jen.Statement) {
+			results := typ.Results()
+			if results.Len() == 1 {
+				typ, err := typeOf(results.At(0).Type())
+				if err != nil {
+					panic(err)
+				}
+				stmt.Add(typ)
+			} else if results.Len() >= 2 {
+				stmt.ParamsFunc(func(gr *jen.Group) {
+					for i := 0; i < results.Len(); i++ {
+						typ, err := typeOf(results.At(i).Type())
+						if err != nil {
+							panic(err)
+						}
+						gr.Add(typ)
+					}
+				})
+			}
+		}), nil
+	case *types.Interface:
+		if !typ.Empty() {
+			return nil, errors.New("anonymous interfaces are unsupported")
+		}
+		return jen.Interface(), nil
 	default:
 		panic("unimplemented")
 	}
@@ -160,8 +196,22 @@ func modulePath() (string, error) {
 	return string(bytes.TrimSpace(path)), nil
 }
 
+func isInternalPackage(pkgpath string) bool {
+	paths := strings.Split(pkgpath, "/")
+	for _, path := range paths {
+		if path == "internal" || path == "vendor" {
+			return true
+		}
+	}
+	return false
+}
+
 func process(module string, pkg *packages.Package) error {
-	if !strings.HasPrefix(pkg.PkgPath, module) {
+	if pkg.Name == "main" {
+		return nil
+	} else if !strings.HasPrefix(pkg.PkgPath, module) {
+		return nil
+	} else if isInternalPackage(pkg.PkgPath) {
 		return nil
 	}
 
@@ -226,6 +276,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	sort.Slice(pkgs, func(i, j int) bool {
+		return pkgs[i].PkgPath < pkgs[j].PkgPath
+	})
 
 	for _, pkg := range pkgs {
 		if err := process(module, pkg); err != nil {
