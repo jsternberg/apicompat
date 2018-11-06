@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/types"
+	"io/ioutil"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/dave/jennifer/jen"
 	"golang.org/x/tools/go/packages"
@@ -132,71 +137,47 @@ func generateFunctionDecl(pkg *packages.Package, decl *ast.FuncDecl) (string, je
 	return decl.Name.Name, stmt, err
 }
 
-func main() {
-	// todo: this should read all files regardless of platform.
-	cfg := packages.Config{
-		Mode: packages.LoadSyntax,
-	}
-
-	args := os.Args[1:]
-	if len(args) == 0 {
-		args = []string{"."}
-	}
-	pkgs, err := packages.Load(&cfg, args...)
+func modulePath() (string, error) {
+	cmd := exec.Command("go", "list", "-m")
+	out, err := cmd.StdoutPipe()
 	if err != nil {
-		panic(err)
+		return "", err
+	}
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	path, err := ioutil.ReadAll(out)
+	if err != nil {
+		return "", err
+	}
+	out.Close()
+
+	if err := cmd.Wait(); err != nil {
+		return "", err
+	}
+	return string(bytes.TrimSpace(path)), nil
+}
+
+func process(module string, pkg *packages.Package) error {
+	if !strings.HasPrefix(pkg.PkgPath, module) {
+		return nil
 	}
 
+	fmt.Println(pkg.PkgPath)
 	snippets := make(map[string]jen.Code)
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Syntax {
-			for _, decl := range f.Decls {
-				switch decl := decl.(type) {
-				case *ast.FuncDecl:
-					if name, code, err := generateFunctionDecl(pkg, decl); err != nil {
-						// todo(jsternberg): handle errors.
-						panic(err)
-					} else if code != nil {
-						snippets[name] = code
-					}
-				case *ast.GenDecl:
-					//for _, spec := range decl.Specs {
-					//	switch spec := spec.(type) {
-					//	case *ast.TypeSpec:
-					//		if !spec.Name.IsExported() {
-					//			continue
-					//		}
-					//
-					//		switch typ := spec.Type.(type) {
-					//		case *ast.InterfaceType:
-					//			// Define a struct with the same name.
-					//			main.Type().Id(spec.Name.Name).Struct()
-					//			main.Var().Id("_").Qual(
-					//				pkg.PkgPath, spec.Name.Name,
-					//			).Op("=").Id(spec.Name.Name).Values()
-					//
-					//			// Define functions for each of the interface methods.
-					//			for _, method := range typ.Methods.List {
-					//				switch typ := method.Type.(type) {
-					//				case *ast.FuncType:
-					//					for _, name := range method.Names {
-					//						if !name.IsExported() {
-					//							continue
-					//						}
-					//						main.Func().Params(jen.Id(spec.Name.Name)).Id(name.Name)
-					//					}
-					//				}
-					//				fmt.Printf("%v %T\n", method.Names, method.Type)
-					//				//main.Func().Params(jen.Id(spec.Name.Name)).Id(
-					//				//	method.
-					//				//	)
-					//			}
-					//
-					//			//main.Func().Params(jen.Id(spec.Name.Name)).
-					//		}
-					//	}
-					//}
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				if name, code, err := generateFunctionDecl(pkg, decl); err != nil {
+					// todo(jsternberg): handle errors.
+					panic(err)
+				} else if code != nil {
+					snippets[name] = code
 				}
+			case *ast.GenDecl:
 			}
 		}
 	}
@@ -207,9 +188,48 @@ func main() {
 	}
 	sort.Strings(names)
 
-	main := jen.NewFile("apicompat")
+	apicompat := jen.NewFile(pkg.Name)
 	for _, name := range names {
-		main.Add(snippets[name])
+		apicompat.Add(snippets[name])
 	}
-	fmt.Println(main.GoString())
+
+	suffix := strings.TrimLeft(strings.TrimPrefix(pkg.PkgPath, module), "/")
+	pkgdir := filepath.Join("internal/apicompat", suffix)
+	if err := os.MkdirAll(pkgdir, 0777); err != nil {
+		return err
+	}
+
+	f, err := os.Create(filepath.Join(pkgdir, "apicompat.go"))
+	if err != nil {
+		return err
+	}
+	f.WriteString(apicompat.GoString())
+	return f.Close()
+}
+
+func main() {
+	module, err := modulePath()
+	if err != nil {
+		panic(err)
+	}
+
+	// todo: this should read all files regardless of platform.
+	cfg := packages.Config{
+		Mode: packages.LoadSyntax,
+	}
+
+	args := os.Args[1:]
+	if len(args) == 0 {
+		args = []string{"./..."}
+	}
+	pkgs, err := packages.Load(&cfg, args...)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, pkg := range pkgs {
+		if err := process(module, pkg); err != nil {
+			panic(err)
+		}
+	}
 }
